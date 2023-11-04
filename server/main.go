@@ -1,50 +1,78 @@
 package main
 
 import (
-	"crypto/sha256"
-	"crypto/subtle"
+	"fmt"
+	"log"
 	"net/http"
+	"os"
 
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
+	"github.com/markbates/goth"
+	"github.com/markbates/goth/gothic"
+	"github.com/markbates/goth/providers/google"
 )
 
-var APIv1 *gin.RouterGroup
-
 func main() {
-	router := gin.New()
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
 
-	APIv1 = router.Group("api/v1")
+	r := gin.New()
+
+	goth.UseProviders(
+		google.New(os.Getenv("GOOGLE_KEY"), os.Getenv("GOOGLE_SECRET"), "http://localhost:8080/auth/google/callback"),
+	)
 
 	// API Version 1
-	GetStatus(APIv1)
-	Login(APIv1)
+	r.GET("/", Index)
+	r.GET("/status", GetStatus)
 
-	router.Run(":8080")
+	r.GET("/auth/:provider", BeginAuth)
+	r.GET("/auth/:provider/callback", CompleteAuth)
+
+	r.Run(":8080")
 }
 
-func Login(router *gin.RouterGroup) {
-	router.POST("/login", func(c *gin.Context) {
-		// from https://www.alexedwards.net/blog/basic-authentication-in-go
-		if username, password, ok := c.Request.BasicAuth(); ok {
-			usernameHash := sha256.Sum256([]byte(username))
-			passwordHash := sha256.Sum256([]byte(password))
-			expectedUsernameHash := sha256.Sum256([]byte("p"))
-			expectedPasswordHash := sha256.Sum256([]byte("m"))
-
-			usernameMatch := (subtle.ConstantTimeCompare(usernameHash[:], expectedUsernameHash[:]) == 1)
-			passwordMatch := (subtle.ConstantTimeCompare(passwordHash[:], expectedPasswordHash[:]) == 1)
-
-			if usernameMatch && passwordMatch {
-				c.JSON(http.StatusOK, gin.H{"message": "Authenticated"})
-				return
-			}
-		}
-		c.JSON(http.StatusUnauthorized, gin.H{"message": "Unauthorized"})
-	})
+// GET /
+func Index(c *gin.Context) {
+	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(fmt.Sprintf(`<html><body>%v</body></html>`, `<a href="/v1/auth/google">google login</a>`)))
 }
 
-func GetStatus(router *gin.RouterGroup) {
-	router.GET("/status", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"message": "ok"})
+// GET /auth/:provider
+func BeginAuth(c *gin.Context) {
+	q := c.Request.URL.Query()
+	q.Add("provider", c.Param("provider"))
+	c.Request.URL.RawQuery = q.Encode()
+	if gothUser, err := gothic.CompleteUserAuth(c.Writer, c.Request); err == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"message": "Authenticated", "data": gothUser},
+		)
+		return
+	} else {
+		gothic.BeginAuthHandler(c.Writer, c.Request)
+	}
+}
+
+// GET /auth/:provider/callback
+func CompleteAuth(c *gin.Context) {
+	q := c.Request.URL.Query()
+	q.Add("provider", c.Param("provider"))
+	c.Request.URL.RawQuery = q.Encode()
+	user, err := gothic.CompleteUserAuth(c.Writer, c.Request)
+	if err != nil {
+		fmt.Fprintln(c.Writer, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Authenticated", "data": user},
+	)
+}
+
+// GET /status
+func GetStatus(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"message": "ok",
 	})
 }
