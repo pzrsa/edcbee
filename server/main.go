@@ -37,7 +37,15 @@ func main() {
 
 // GET /
 func Index(c *gin.Context) {
-	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(fmt.Sprintf(`<html><body>%v</body></html>`, `<a href="/v1/auth/google">google login</a>`)))
+	html := fmt.Sprintf(`<html><body>%v</body></html>`, `<a href="/v1/auth/google">google login</a>`)
+	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(html))
+}
+
+// GET /status
+func GetStatus(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"message": "ok",
+	})
 }
 
 // GET /auth/:provider
@@ -62,17 +70,10 @@ func CompleteAuth(c *gin.Context) {
 	c.Request.URL.RawQuery = q.Encode()
 	user, err := gothic.CompleteUserAuth(c.Writer, c.Request)
 	if err != nil {
-		fmt.Fprintln(c.Writer, err)
+		log.Println(c.Writer, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Authenticated", "data": user},
 	)
-}
-
-// GET /status
-func GetStatus(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"message": "ok",
-	})
 }
