@@ -1,12 +1,14 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	"github.com/markbates/goth"
 	"github.com/markbates/goth/gothic"
@@ -37,7 +39,7 @@ func main() {
 
 // GET /
 func Index(c *gin.Context) {
-	html := fmt.Sprintf(`<html><body>%v</body></html>`, `<a href="/v1/auth/google">google login</a>`)
+	html := fmt.Sprintf(`<html><body>%v</body></html>`, `<a href="/auth/google">google login</a>`)
 	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(html))
 }
 
@@ -70,10 +72,53 @@ func CompleteAuth(c *gin.Context) {
 	c.Request.URL.RawQuery = q.Encode()
 	user, err := gothic.CompleteUserAuth(c.Writer, c.Request)
 	if err != nil {
-		log.Println(c.Writer, err)
+		log.Println(err)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"message": "Error occurred"},
+		)
 		return
 	}
+	SetCookie(c, CreateCookie())
 	c.JSON(http.StatusOK, gin.H{
-		"message": "Authenticated", "data": user},
+		"message": "Authenticated",
+		"data":    user},
 	)
+}
+
+func CreateCookie() http.Cookie {
+	return http.Cookie{
+		Name:     "session",
+		Value:    base64.URLEncoding.EncodeToString([]byte(uuid.New().String())),
+		Path:     "/",
+		MaxAge:   86400,
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+	}
+}
+
+func SetCookie(c *gin.Context, cookie http.Cookie) {
+	c.SetSameSite(cookie.SameSite)
+	c.SetCookie(
+		cookie.Name,
+		cookie.Value,
+		cookie.MaxAge,
+		cookie.Path,
+		cookie.Domain,
+		cookie.Secure,
+		cookie.HttpOnly)
+}
+
+func ReadCookie(c *gin.Context, name string) (string, error) {
+	cookie, err := c.Request.Cookie(name)
+	if err != nil {
+		return "", err
+	}
+
+	v, err := base64.URLEncoding.DecodeString(cookie.Value)
+	if err != nil {
+		return "", err
+	}
+
+	return string(v), nil
 }
