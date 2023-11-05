@@ -9,11 +9,14 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/gorilla/sessions"
 	"github.com/joho/godotenv"
 	"github.com/markbates/goth"
 	"github.com/markbates/goth/gothic"
 	"github.com/markbates/goth/providers/google"
 )
+
+var store = sessions.NewCookieStore([]byte(os.Getenv("SESSION_SECRET")))
 
 func main() {
 	err := godotenv.Load()
@@ -26,6 +29,7 @@ func main() {
 	goth.UseProviders(
 		google.New(os.Getenv("GOOGLE_KEY"), os.Getenv("GOOGLE_SECRET"), "http://localhost:8080/auth/google/callback"),
 	)
+	gothic.Store = store
 
 	// API Version 1
 	r.GET("/", Index)
@@ -39,8 +43,17 @@ func main() {
 
 // GET /
 func Index(c *gin.Context) {
-	html := fmt.Sprintf(`<html><body>%v</body></html>`, `<a href="/auth/google">google login</a>`)
-	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(html))
+	value, err := ReadCookie(c, "user_session")
+
+	if err != nil {
+		html := fmt.Sprintf(`<html><body>%v</body></html>`, `<a href="/auth/google">google login</a>`)
+		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(html))
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Authenticated", "data": value},
+	)
 }
 
 // GET /status
@@ -78,16 +91,16 @@ func CompleteAuth(c *gin.Context) {
 		)
 		return
 	}
-	SetCookie(c, CreateCookie())
+	SetCookie(c, CreateCookie("user_session"))
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Authenticated",
 		"data":    user},
 	)
 }
 
-func CreateCookie() http.Cookie {
+func CreateCookie(name string) http.Cookie {
 	return http.Cookie{
-		Name:     "session",
+		Name:     name,
 		Value:    base64.URLEncoding.EncodeToString([]byte(uuid.New().String())),
 		Path:     "/",
 		MaxAge:   86400,
