@@ -7,16 +7,13 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/gorilla/sessions"
 	"github.com/joho/godotenv"
+	"github.com/julienschmidt/httprouter"
 	"github.com/markbates/goth"
 	"github.com/markbates/goth/gothic"
 	"github.com/markbates/goth/providers/google"
 )
-
-var store = sessions.NewCookieStore([]byte(os.Getenv("SESSION_SECRET")))
 
 func main() {
 	err := godotenv.Load()
@@ -24,78 +21,67 @@ func main() {
 		log.Fatal("Error loading .env file")
 	}
 
-	r := gin.New()
+	r := httprouter.New()
+
+	// API Version 1
+	r.HandlerFunc("GET", "/", Index)
+	r.HandlerFunc("GET", "/status", GetStatus)
+
+	r.HandlerFunc("GET", "/auth/:provider", BeginAuth)
+	r.HandlerFunc("GET", "/auth/:provider/callback", CompleteAuth)
 
 	goth.UseProviders(
 		google.New(os.Getenv("GOOGLE_KEY"), os.Getenv("GOOGLE_SECRET"), "http://localhost:8080/auth/google/callback"),
 	)
-	gothic.Store = store
 
-	// API Version 1
-	r.GET("/", Index)
-	r.GET("/status", GetStatus)
-
-	r.GET("/auth/:provider", BeginAuth)
-	r.GET("/auth/:provider/callback", CompleteAuth)
-
-	r.Run(":8080")
+	log.Fatalln(http.ListenAndServe(":8080", r))
 }
 
 // GET /
-func Index(c *gin.Context) {
-	value, err := ReadCookie(c, "user_session")
+func Index(w http.ResponseWriter, r *http.Request) {
+	value, err := ReadCookie(r, "user_session")
 
 	if err != nil {
 		html := fmt.Sprintf(`<html><body>%v</body></html>`, `<a href="/auth/google">google login</a>`)
-		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(html))
+		w.Header().Set("Content-Type", "text/html; charset=UTF-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(html))
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"message": "Authenticated", "data": value},
-	)
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(value))
 }
 
 // GET /status
-func GetStatus(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"message": "ok",
-	})
+func GetStatus(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("ok"))
 }
 
 // GET /auth/:provider
-func BeginAuth(c *gin.Context) {
-	q := c.Request.URL.Query()
-	q.Add("provider", c.Param("provider"))
-	c.Request.URL.RawQuery = q.Encode()
-	if gothUser, err := gothic.CompleteUserAuth(c.Writer, c.Request); err == nil {
-		c.JSON(http.StatusOK, gin.H{
-			"message": "Authenticated", "data": gothUser},
-		)
+func BeginAuth(w http.ResponseWriter, r *http.Request) {
+	fmt.Println(httprouter.ParamsFromContext(r.Context()))
+	if gothUser, err := gothic.CompleteUserAuth(w, r); err == nil {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(gothUser.Email))
 		return
 	} else {
-		gothic.BeginAuthHandler(c.Writer, c.Request)
+		gothic.BeginAuthHandler(w, r)
 	}
 }
 
 // GET /auth/:provider/callback
-func CompleteAuth(c *gin.Context) {
-	q := c.Request.URL.Query()
-	q.Add("provider", c.Param("provider"))
-	c.Request.URL.RawQuery = q.Encode()
-	user, err := gothic.CompleteUserAuth(c.Writer, c.Request)
+func CompleteAuth(w http.ResponseWriter, r *http.Request) {
+	user, err := gothic.CompleteUserAuth(w, r)
 	if err != nil {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Error"))
 		log.Println(err)
-		c.JSON(http.StatusBadRequest, gin.H{
-			"message": "Error occurred"},
-		)
 		return
 	}
-	SetCookie(c, CreateCookie("user_session"))
-	c.JSON(http.StatusOK, gin.H{
-		"message": "Authenticated",
-		"data":    user},
-	)
+	SetCookie(w, CreateCookie("user_session"))
+	w.Write([]byte(user.Email))
 }
 
 func CreateCookie(name string) http.Cookie {
@@ -110,20 +96,12 @@ func CreateCookie(name string) http.Cookie {
 	}
 }
 
-func SetCookie(c *gin.Context, cookie http.Cookie) {
-	c.SetSameSite(cookie.SameSite)
-	c.SetCookie(
-		cookie.Name,
-		cookie.Value,
-		cookie.MaxAge,
-		cookie.Path,
-		cookie.Domain,
-		cookie.Secure,
-		cookie.HttpOnly)
+func SetCookie(w http.ResponseWriter, cookie http.Cookie) {
+	http.SetCookie(w, &cookie)
 }
 
-func ReadCookie(c *gin.Context, name string) (string, error) {
-	cookie, err := c.Request.Cookie(name)
+func ReadCookie(r *http.Request, name string) (string, error) {
+	cookie, err := r.Cookie(name)
 	if err != nil {
 		return "", err
 	}
