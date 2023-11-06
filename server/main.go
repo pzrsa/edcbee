@@ -2,18 +2,22 @@ package main
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/gorilla/mux"
 	"github.com/joho/godotenv"
-	"github.com/julienschmidt/httprouter"
 	"github.com/markbates/goth"
 	"github.com/markbates/goth/gothic"
 	"github.com/markbates/goth/providers/google"
 )
+
+type H map[string]interface{}
 
 func main() {
 	err := godotenv.Load()
@@ -21,20 +25,27 @@ func main() {
 		log.Fatal("Error loading .env file")
 	}
 
-	r := httprouter.New()
+	r := mux.NewRouter()
 
 	// API Version 1
-	r.HandlerFunc("GET", "/", Index)
-	r.HandlerFunc("GET", "/status", GetStatus)
+	r.HandleFunc("/", Index).Methods("GET")
+	r.HandleFunc("/status", GetStatus).Methods("GET")
 
-	r.HandlerFunc("GET", "/auth/:provider", BeginAuth)
-	r.HandlerFunc("GET", "/auth/:provider/callback", CompleteAuth)
+	r.HandleFunc("/auth/{provider}", BeginAuth).Methods("GET")
+	r.HandleFunc("/auth/{provider}/callback", CompleteAuth).Methods("GET")
 
 	goth.UseProviders(
 		google.New(os.Getenv("GOOGLE_KEY"), os.Getenv("GOOGLE_SECRET"), "http://localhost:8080/auth/google/callback"),
 	)
+	srv := &http.Server{
+		Handler:      r,
+		Addr:         ":8080",
+		WriteTimeout: 15 * time.Second,
+		ReadTimeout:  15 * time.Second,
+	}
 
-	log.Fatalln(http.ListenAndServe(":8080", r))
+	log.Println(fmt.Sprintf("listening on %s...", srv.Addr))
+	log.Fatalln(srv.ListenAndServe())
 }
 
 // GET /
@@ -49,39 +60,36 @@ func Index(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(value))
+	json.NewEncoder(w).Encode(H{"message": "Authenticated", "data": value})
 }
 
 // GET /status
 func GetStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("ok"))
+	json.NewEncoder(w).Encode(H{"message": "yo"})
 }
 
-// GET /auth/:provider
+// GET /auth/{provider}
 func BeginAuth(w http.ResponseWriter, r *http.Request) {
-	fmt.Println(httprouter.ParamsFromContext(r.Context()))
-	if gothUser, err := gothic.CompleteUserAuth(w, r); err == nil {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(gothUser.Email))
-		return
-	} else {
-		gothic.BeginAuthHandler(w, r)
-	}
+	gothic.BeginAuthHandler(w, r)
 }
 
-// GET /auth/:provider/callback
+// GET /auth/{provider}/callback
 func CompleteAuth(w http.ResponseWriter, r *http.Request) {
-	user, err := gothic.CompleteUserAuth(w, r)
+	_, err := gothic.CompleteUserAuth(w, r)
 	if err != nil {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Error"))
-		log.Println(err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+
+		log.Println("Error:", err)
+		json.NewEncoder(w).Encode(H{"message": "Error"})
 		return
 	}
 	SetCookie(w, CreateCookie("user_session"))
-	w.Write([]byte(user.Email))
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func CreateCookie(name string) http.Cookie {
