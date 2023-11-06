@@ -19,6 +19,8 @@ import (
 
 type H map[string]interface{}
 
+var sessions = make(map[string]goth.User)
+
 func main() {
 	err := godotenv.Load()
 	if err != nil {
@@ -59,10 +61,11 @@ func Index(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(html))
 		return
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(H{"message": "Authenticated", "data": value})
+	if user, ok := sessions[value]; ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(H{"message": "Authenticated", "data": user})
+	}
 }
 
 // GET /status
@@ -79,7 +82,7 @@ func BeginAuth(w http.ResponseWriter, r *http.Request) {
 
 // GET /auth/{provider}/callback
 func CompleteAuth(w http.ResponseWriter, r *http.Request) {
-	_, err := gothic.CompleteUserAuth(w, r)
+	user, err := gothic.CompleteUserAuth(w, r)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -88,7 +91,10 @@ func CompleteAuth(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(H{"message": "Error"})
 		return
 	}
-	SetCookie(w, CreateCookie("user_session"))
+	cookie := CreateCookie("user_session")
+	sessions[cookie.Value] = user
+	SetCookie(w, cookie)
+
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
@@ -114,10 +120,5 @@ func ReadCookie(r *http.Request, name string) (string, error) {
 		return "", err
 	}
 
-	v, err := base64.URLEncoding.DecodeString(cookie.Value)
-	if err != nil {
-		return "", err
-	}
-
-	return string(v), nil
+	return cookie.Value, nil
 }
